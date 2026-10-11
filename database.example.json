@@ -1,0 +1,12 @@
+{
+  "url_env": "SOURCE_DATABASE_URL",
+  "schemas": ["public"],
+  "tables": ["products"],
+  "queries": {
+    "low_stock": {
+      "description": "기준 수량 이하인 제품의 현재 재고 조회",
+      "sql": "SELECT id, name, stock FROM public.products WHERE stock <= :threshold ORDER BY stock ASC LIMIT 100",
+      "parameters": {"threshold": "integer"}
+    }
+  }
+}

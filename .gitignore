@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/
+frontend/node_modules/
+frontend/dist/
+*.log
+.cache/
+database.json
+
+# Defence in depth: the settings store holds API keys in plaintext, so never let a
+# database file through even if data/ is ever unignored.
+*.sqlite
+*.sqlite-*
