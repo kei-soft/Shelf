@@ -4,197 +4,286 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Python Deep Agents **0.7.23**, FastAPI, Neo4j, React로 구성한 로컬 개인용 RAG 앱입니다.
-PDF·EPUB·텍스트·웹페이지·PostgreSQL 스키마를 등록하고 출처가 있는 답변과 근거 관계도를 조회합니다.
+PDF·EPUB·텍스트·웹페이지·PostgreSQL 스키마를 등록하고, **출처가 검증된 답변**과 근거 관계도를 받는 로컬 개인용 RAG 앱입니다. Ollama만으로 완전히 오프라인 구동하거나 OpenAI API를 쓸 수 있습니다.
 
-> **English** — Shelf is a single-user, local RAG app. Register PDFs, EPUBs, web pages or a
-> PostgreSQL schema; ask questions and get answers where **every factual paragraph carries a
-> citation the server itself resolved** — fabricated citations are rejected rather than shown.
-> Runs fully offline with Ollama, or against the OpenAI API. Chunks, summaries and extracted
-> entity relations live in Neo4j; the UI shows the passages and a relation graph behind each answer.
-> Docs are in Korean. See [SECURITY.md](SECURITY.md) before exposing it to anything but localhost.
+> **English** — Shelf is a single-user, local RAG app over PDFs, EPUBs, web pages and a PostgreSQL
+> schema. Every factual paragraph in an answer must carry an evidence ID the server itself resolved
+> that turn; fabricated or unciteable claims are rejected rather than shown. Runs fully offline with
+> Ollama, or against the OpenAI API. Docs below are in Korean. Read [SECURITY.md](SECURITY.md)
+> before exposing it to anything but localhost.
 
 ![근거가 달린 답변과 출처 패널](docs/screenshots/chat-citations.jpg)
 
-답변의 각 사실 문단에는 서버가 실제로 조회한 원문 ID에서 나온 인용 번호가 붙습니다. 오른쪽 패널에서 그 원문을 바로 확인할 수 있습니다.
-
 ![자료에서 추출한 관계도](docs/screenshots/relation-graph.jpg)
 
-관계도 탭은 답변의 근거가 된 문단에서 추출한 개체 관계를 보여줍니다. 노드를 눌러 주변 관계를 펼치고, 간선을 눌러 그 관계의 원문을 읽습니다.
+---
 
-## 빠른 실행 (Windows PowerShell)
+## 목차
 
-Python 3.11 이상, uv, Node.js와 **Neo4j 2026.01 이상**이 필요합니다. 검색이 벡터 인덱스 내부에서 자료 범위를 거르는 `SEARCH` 절을 쓰기 때문이며, 5.x에서는 인덱스 생성이 실패합니다. Docker Desktop은 Neo4j를 컨테이너로 실행할 때만 필요합니다. 프로젝트 루트에서 실행합니다.
+[무엇이 다른가](#무엇이-다른가) · [요구 사항](#요구-사항) · [설치](#설치) · [실행](#실행) · [사용법](#사용법) ·
+[모델 설정](#모델-설정) · [Neo4j](#neo4j) · [PostgreSQL](#postgresql-선택) · [OCR](#ocr-선택) ·
+[데이터와 전송 범위](#데이터와-전송-범위) · [동작 방식](#동작-방식) · [개발](#개발) · [한계](#한계)
 
-```powershell
-Copy-Item .env.example .env
-# API 키와 접속 정보는 앱의 '연결 및 모델 설정'에서 입력할 수도 있습니다.
-# Docker를 쓴다면 최초 Neo4j 서버 비밀번호는 .env의 NEO4J_PASSWORD로 정합니다.
+---
+
+## 무엇이 다른가
+
+**인용이 검증됩니다.** 답변의 모든 사실 문단은 서버가 **그 턴에 실제로 조회한** 원문 ID를 가져야 합니다. 모델이 ID를 지어내거나 근거 없이 주장하면, 그 문단은 화면에 나오지 않고 거절됩니다. 인용 번호는 모델이 쓰는 것이 아니라 서버가 붙입니다.
+
+**자료가 명령을 내리지 못합니다.** 업로드한 문서 본문은 신뢰할 수 없는 입력으로 다룹니다. 에이전트에게는 검색 관련 도구 4~6개만 주고, 프레임워크가 기본 제공하는 파일시스템·서브에이전트 도구는 제거했습니다.
+
+**검색 범위가 인덱스 안에서 걸립니다.** 선택한 자료와 활성 버전으로 Neo4j 벡터 인덱스 **내부에서** 후보를 거릅니다. 자료가 늘어도 좁은 선택이 검색 결과를 잃지 않습니다.
+
+**분석을 직접 시작하고 멈춥니다.** 등록만으로는 아무 일도 일어나지 않습니다. 분석 버튼을 눌러 시작하고, 진행 중에 중단할 수 있으며, 삭제하면 Neo4j 데이터·원본 파일·대화 체크포인트가 함께 사라집니다.
+
+---
+
+## 요구 사항
+
+| 항목 | 요구 |
+|---|---|
+| Python | 3.11 이상 (uv 사용) |
+| Node.js | 프런트엔드 빌드용 |
+| **Neo4j** | **2026.01 이상** |
+| Ollama 또는 OpenAI 키 | 채팅·임베딩 모델 |
+| Docker | 선택 — Neo4j를 컨테이너로 띄울 때만 |
+
+> **Neo4j 2026.01 이상이 필수입니다.** 검색이 벡터 인덱스 내부에서 자료 범위를 거르는 Cypher `SEARCH` 절을 사용하며, 5.x에서는 인덱스 생성 단계에서 실패합니다.
+
+---
+
+## 설치
+
+```bash
+cp .env.example .env          # Windows: Copy-Item .env.example .env
 uv sync --frozen --cache-dir .cache/uv
-docker compose up -d  # Docker로 Neo4j를 실행할 경우에만
-npm.cmd --prefix frontend ci
-npm.cmd --prefix frontend run build
+npm --prefix frontend ci      # Windows: npm.cmd
+npm --prefix frontend run build
 ```
 
-API를 실행하면 자료 분석 워커도 자동으로 시작됩니다. 워커가 종료되면 다시 시작하며, 이미 별도 워커가 실행 중이면 중복 실행하지 않습니다.
+`.env`는 선택입니다. API 키와 접속 정보는 앱의 **연결 및 모델 설정** 화면에서 입력해도 됩니다.
 
-```powershell
+Neo4j를 Docker로 띄운다면 최초 서버 비밀번호를 `.env`의 `NEO4J_PASSWORD`로 정한 뒤:
+
+```bash
+docker compose up -d
+```
+
+---
+
+## 실행
+
+```bash
 uv run --frozen --cache-dir .cache/uv uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-브라우저: **http://127.0.0.1:8000** · API 문서: **http://127.0.0.1:8000/docs**
-Neo4j Browser: **http://127.0.0.1:7474**
+Windows에서는 `./run.ps1` 하나로 의존성 확인부터 실행까지 처리합니다.
 
-Windows에서는 `./run.ps1`로 API와 워커를 함께 실행할 수도 있습니다. Neo4j는 Docker 또는 별도 설치 중 선택해 실행하세요.
-이미 실행 중인 API가 있으면 먼저 종료하세요. Ctrl+C로 API와 자동 실행한 워커가 함께 종료되며 워커 로그는 `data/worker.log`입니다.
+| 주소 | 용도 |
+|---|---|
+| http://127.0.0.1:8000 | 앱 |
+| http://127.0.0.1:8000/docs | API 문서 |
+| http://127.0.0.1:7474 | Neo4j Browser |
 
-별도 워커를 직접 관리하려면 `.env`에 `SHELF_AUTOSTART_WORKER=false`를 넣고 `uv run --frozen --cache-dir .cache/uv python -m app.worker`를 다른 터미널에서 실행합니다.
+API를 실행하면 **자료 분석 워커가 자동으로 함께 시작**됩니다. 워커가 죽으면 다시 띄우고, 이미 다른 워커가 돌고 있으면 중복 실행하지 않습니다. Ctrl+C로 함께 종료되며 로그는 `data/worker.log`입니다.
 
-1. `자료 추가`로 문서, 웹 URL 또는 PostgreSQL 스키마를 등록합니다. **등록만으로는 분석하지 않습니다.**
-2. 목록의 분석 버튼(▶)을 누르면 워커가 청크·요약·임베딩·관계를 생성합니다. 분석 중에는 중단 버튼(■)으로 멈출 수 있고, 중단하거나 실패한 자료는 다시 분석하거나 삭제할 수 있습니다. 삭제하면 Neo4j의 Source·Chunk·Assertion과 원본 파일이 함께 제거됩니다. 준비 완료가 되면 자료를 선택합니다.
-3. 자료를 선택하면 근거 기반 답변, 선택하지 않으면 일반 대화로 답합니다. 인용 버튼으로 원문을 확인합니다.
-4. 관계도 탭에서 노드를 눌러 주변 관계를 펼치거나 간선을 눌러 근거를 읽습니다.
-5. 자료 범위를 바꾸면 새 대화가 시작됩니다. 기존 대화는 최근 대화에서 다시 엽니다.
+워커를 직접 관리하려면 `.env`에 `SHELF_AUTOSTART_WORKER=false`를 넣고 별도 터미널에서:
 
-일반 대화에는 Neo4j나 임베딩이 필요하지 않습니다. 채팅 모델만 연결되면 인사·일반 질문·후속 대화를 처리합니다. 일반 대화는 업로드 자료나 실시간 웹/DB를 읽은 답변이 아니며 자료 출처가 표시되지 않습니다.
-자료의 `대기 중`은 분석 시작 전 상태이고, 선택한다고 분석이 시작되는 구조가 아닙니다. 업로드 후 워커가 자동 처리합니다. 분석 중에는 `임베딩 생성`, `요약·관계 추출 3/23`, `Neo4j에 저장`처럼 진행 상황이 표시됩니다. 자료는 준비 완료 후 선택할 수 있습니다.
+```bash
+uv run --frozen --cache-dir .cache/uv python -m app.worker
+```
 
-실제 자료의 본문은 선택한 모델/임베딩 서버에 전송됩니다. 둘 다 로컬 Ollama를 선택하면 OpenAI API로 자료를 보내지 않습니다. Ollama의 cloud 모델이나 외부 Ollama 주소를 사용하면 로컬 처리가 아닙니다.
+---
 
-## 화면에서 설정하기
+## 사용법
 
-왼쪽 아래 **연결 및 모델 설정**에서 다음을 입력하고 `설정 저장`을 누릅니다.
+1. **자료 추가** — 문서, 웹 URL 또는 PostgreSQL 스키마를 등록합니다. 등록 직후 상태는 `분석 대기`이며, **등록만으로는 분석하지 않습니다.**
+2. **분석 시작** — 목록의 ▶ 버튼을 누르면 워커가 청크·임베딩·요약·관계를 만듭니다. 진행 상황이 `요약·관계 추출 48/93`처럼 표시됩니다.
+3. **중단·재분석·삭제** — 분석 중에는 ■ 버튼으로 멈출 수 있습니다. 중단하거나 실패한 자료는 다시 분석하거나 삭제합니다.
+4. **대화** — `준비 완료`가 된 자료를 선택하고 질문합니다. 자료를 선택하지 않으면 일반 대화로 답합니다.
+5. **근거 확인** — 인용 번호나 출처 칩을 눌러 원문을 읽고, **관계도** 탭에서 노드를 눌러 주변 관계를 펼치거나 간선을 눌러 그 관계의 원문을 봅니다.
 
-- 채팅 제공자(OpenAI/Ollama), 모델 이름
-- 임베딩 제공자, 모델 이름, 벡터 차원
-- Ollama 서버 주소, 문맥 길이, 설치된 모델 목록 확인
-- OpenAI API 키, Neo4j 주소·사용자·접속 비밀번호·DB 이름
-- PostgreSQL 읽기 전용 접속 URL
+자료 범위를 바꾸면 새 대화가 시작됩니다. 기존 대화는 **최근 대화**에서 다시 엽니다.
 
-각 `연결 확인` 버튼은 입력 중인 값으로 테스트하며 자동 저장하지 않습니다. `채팅 모델 확인`은 도구 호출을 실제로 실행하고, `임베딩 확인`은 짧은 텍스트를 임베딩하므로 API 선택 시 소량의 사용료가 발생할 수 있습니다.
+**일반 대화**(자료 미선택)에는 Neo4j도 임베딩도 필요 없습니다. 채팅 모델만 연결되면 동작하며, 업로드 자료나 웹·DB를 읽지 않으므로 출처가 표시되지 않습니다.
 
-비밀키는 `data/app.sqlite`에 평문으로 저장합니다. GET/저장 응답에는 원래 비밀키 대신 설정 여부만 반환하며, 비밀키 입력란을 비워두면 기존 값이 유지됩니다. 브라우저 localStorage에는 저장하지 않습니다. 해당 파일도 비밀 설정 파일처럼 보호해주세요.
-우선순위는 **화면에서 저장한 값 > 프로세스 환경변수 > .env > 기본값**입니다. API와 워커는 저장값을 다음 작업부터 읽으며 재시작할 필요가 없습니다. 분석/답변 생성 중에는 변경을 거부합니다.
+---
 
-검색 모델·차원 또는 대상 Neo4j 서버/DB를 바꾸면 원본은 유지하고 모든 자료를 다시 분석합니다. 워커를 실행해두세요. 새 검색 모델의 벡터는 별도 Neo4j 인덱스와 프로필로 격리합니다. 다른 서버로 옮기기 전 서버에 남은 그래프는 자동 삭제하지 않습니다.
+## 모델 설정
 
-## Ollama로 실행
+왼쪽 아래 **연결 및 모델 설정**에서 입력하고 `설정 저장`을 누릅니다. 각 `연결 확인` 버튼은 입력 중인 값으로 테스트하며 자동 저장하지 않습니다.
 
-Ollama를 설치하고 실행한 뒤 모델을 준비합니다. 다음은 설정 창의 초기 예시입니다.
+- `채팅 모델 확인`은 **도구 호출을 실제로 실행**합니다. Deep Agents가 도구 호출을 요구하므로 포트만 확인해서는 의미가 없습니다.
+- `임베딩 및 차원 확인`은 짧은 텍스트를 임베딩해 실제 출력 차원이 설정과 맞는지 봅니다.
+- API 제공자를 선택했다면 두 버튼 모두 소량의 사용료가 발생합니다.
 
-```powershell
+설정 우선순위는 **화면 저장값 > 환경변수 > `.env` > 기본값**입니다. 저장하면 다음 작업부터 적용되며 재시작이 필요 없습니다. 분석이나 답변 생성 중에는 저장을 거부합니다.
+
+### Ollama (완전 로컬)
+
+```bash
 ollama pull qwen3:8b
 ollama pull bge-m3
 ```
 
-설정 창에서 채팅 제공자는 `Ollama`, 모델은 `qwen3:8b`, 임베딩 제공자는 `Ollama`, 모델은 `bge-m3`, 차원은 `1024`로 선택합니다. `채팅 모델 확인`과 `임베딩 및 차원 확인` 후 저장하세요. 서버 주소 기본값은 `http://127.0.0.1:11434`입니다. OpenAI API 키는 필요 없습니다.
+설정 창에서 채팅 `Ollama` / `qwen3:8b`, 임베딩 `Ollama` / `bge-m3` / 차원 `1024`을 지정합니다. 서버 주소 기본값은 `http://127.0.0.1:11434`이고 OpenAI 키는 필요 없습니다.
 
-Deep Agents는 도구 호출이 가능한 모델이 필요합니다. 설치된 다른 모델도 사용할 수 있지만 모델 크기, 메모리와 도구 호출 정확도에 따라 결과가 달라집니다. 문맥 길이 기본값은 32768이며 메모리가 부족하면 줄여주세요.
-공식 모델 정보: [Qwen3 8B](https://ollama.com/library/qwen3:8b), [BGE-M3](https://ollama.com/library/bge-m3).
+도구 호출이 가능한 모델이어야 합니다. 모델에 따라 지시 이행 품질이 크게 다르므로, 바꾼 뒤에는 `채팅 모델 확인`으로 검증하세요. 문맥 길이 기본값 32768은 메모리가 부족하면 줄입니다.
 
-## Docker의 역할
+참고: [Qwen3 8B](https://ollama.com/library/qwen3:8b) · [BGE-M3](https://ollama.com/library/bge-m3)
 
-현재 `compose.yaml`은 **Neo4j 서버 하나만** 실행합니다. 앱과 Ollama를 실행하는 데 Docker가 필요한 것은 아닙니다.
-Neo4j Desktop/직접 설치/외부 Neo4j 서버를 쓰면 `docker compose`를 실행하지 않고 설정 창에 해당 접속 정보를 입력하면 됩니다.
+### OpenAI
 
-설정 창의 Neo4j 비밀번호는 **접속에 사용할 비밀번호**입니다. Neo4j 서버의 비밀번호를 바꾸는 기능이 아닙니다. Docker 초기 비밀번호는 `.env`의 `NEO4J_PASSWORD`로 정합니다. 기존 Neo4j 데이터 볼륨이 있으면 `.env`를 바꿔도 서버 비밀번호는 바뀌지 않으므로 기존 비밀번호를 입력하세요.
+설정 창에 API 키를 넣고 채팅·임베딩 제공자를 `OpenAI`로 바꿉니다. 채팅과 임베딩을 **따로** 고를 수 있으므로, 임베딩만 로컬에 두는 구성도 가능합니다.
 
-## PostgreSQL
+> **임베딩 모델이나 차원을 바꾸면 등록된 모든 자료가 재분석됩니다.** 원본은 유지되며, 새 벡터는 별도 인덱스로 격리해 섞이지 않게 합니다. 채팅 모델만 바꾸는 것은 재분석을 일으키지 않습니다.
 
-```powershell
-Copy-Item database.example.json database.json
+---
+
+## Neo4j
+
+`compose.yaml`은 **Neo4j 서버 하나만** 띄웁니다. 앱과 Ollama에는 Docker가 필요하지 않습니다. Neo4j Desktop이나 직접 설치, 외부 서버를 쓴다면 `docker compose`를 건너뛰고 설정 창에 접속 정보만 넣으면 됩니다.
+
+설정 창의 Neo4j 비밀번호는 **접속에 사용할 비밀번호**입니다. 서버 비밀번호를 바꾸는 기능이 아닙니다. Docker 초기 비밀번호는 `.env`의 `NEO4J_PASSWORD`로 정해지며, 기존 데이터 볼륨이 있으면 `.env`를 바꿔도 서버 비밀번호는 그대로이므로 **기존 비밀번호**를 입력해야 합니다.
+
+대상 Neo4j 서버나 DB를 바꾸면 자료를 다시 분석합니다. **이전 서버에 남은 그래프는 자동으로 지우지 않습니다.**
+
+---
+
+## PostgreSQL (선택)
+
+```bash
+cp database.example.json database.json
 ```
 
-`.env`에 다음을 추가합니다. 비밀번호의 특수문자는 URL 인코딩해야 합니다.
+`.env`에 추가합니다. 비밀번호의 특수문자는 URL 인코딩이 필요합니다.
 
 ```dotenv
 SOURCE_DATABASE_URL=postgresql+psycopg://rag_reader:YOUR_PASSWORD@localhost:5432/YOUR_DATABASE
 DATABASE_CONFIG=database.json
 ```
 
-`database.json`의 `schemas`, `tables`, `queries`를 실제 DB 구조에 맞게 편집합니다.
-예시 `products` 테이블이나 `low_stock` SQL은 사용자의 실제 스키마에 맞춰 바꿔야 합니다.
-접속 URL은 설정 창에서 입력할 수도 있으며 저장 후에는 다시 반환하지 않습니다. `database.json`과 `.env` 및 `data/`는 Git에서 제외됩니다.
+`database.json`의 `schemas`, `tables`, `queries`를 실제 스키마에 맞게 편집하세요. 예시의 `products` 테이블과 `low_stock` 조회는 그대로 쓸 수 없습니다.
 
-DB 관리자가 전용 계정에 필요한 테이블의 SELECT만 부여하고 기본 읽기 전용 트랜잭션을 설정합니다.
-앱도 매 조회에 `SET TRANSACTION READ ONLY`, 5초 statement timeout, 2초 lock timeout을 적용합니다.
-에이전트는 등록된 조회 이름과 매개변수만 전달하며 SQL 자체를 작성하거나 실행할 수 없습니다.
-결과는 최대 100행이며 조회 시각과 매개변수가 근거에 기록됩니다.
+**에이전트는 SQL을 작성하거나 실행할 수 없습니다.** `database.json`에 미리 등록한 조회의 **이름과 매개변수만** 전달하며, 매개변수는 타입 검증을 거칩니다. 모든 조회에 `SET TRANSACTION READ ONLY`, 5초 statement timeout, 2초 lock timeout이 적용되고 결과는 최대 100행입니다. 조회 시각과 매개변수가 근거에 기록됩니다.
 
-스키마 등록은 실제 행 데이터를 임베딩하지 않습니다. 실제 수치는 허용된 조회를 사용합니다.
-DB 조회 도구는 PostgreSQL 자료를 선택한 대화에서만 제공됩니다.
+DB 관리자는 전용 계정에 필요한 테이블의 SELECT만 부여하시기 바랍니다. 스키마 등록은 **행 데이터를 임베딩하지 않습니다** — 실제 수치는 등록된 조회로만 가져옵니다. DB 조회 도구는 PostgreSQL 자료를 선택한 대화에서만 제공됩니다.
 
-## 자료 처리와 검색
+---
 
-- 파일 최대 30MB, 자료당 최대 2,000청크. 청크는 페이지/EPUB spine 항목을 보존하며 700토큰, 80토큰 겹침입니다.
-- 웹은 입력한 **단일 HTML 페이지**를 수집합니다. 크롤링 확장·로그인·JavaScript 렌더링은 포함하지 않습니다.
-- 웹 연결은 공개 IP로 제한하고 연결 주소를 고정해 DNS rebinding을 차단합니다. 리디렉션은 최종 URL을 다시 등록합니다.
-- 문서별 내용 해시로 중복 재분석을 생략합니다. 새로운 버전이 모두 완성되어야 Neo4j 활성 포인터를 전환합니다.
-- 벡터와 full-text 검색 후보를 RRF로 결합합니다. 후보 100개에 자료 범위를 적용하므로 대규모 자료함에서 검색 누락이 생길 수 있습니다. 실제 질문으로 recall을 평가해 후보 수나 pre-filter 검색으로 확장합니다.
-- 관계는 원문 청크와 연결된 미검토 Assertion입니다. 이름 정규화만 적용하므로 동명이인·동음이의어를 구별하는 개체 검토 기능은 후속 작업입니다.
-- 전체 요약 도구는 해당 자료의 모든 청크 요약을 읽습니다. 긴 책의 요약 품질은 별도 평가가 필요합니다.
-- 설정 창에서 임베딩 모델/차원을 변경하면 자료가 재분석 대기열에 등록됩니다. 새 프로필별 인덱스를 사용해 벡터 혼합을 막습니다.
-- 작업 대기열은 SQLite에 저장됩니다. 워커 재시작 시 중단 작업을 복구하고, 실패 작업은 UI에서 재시도합니다.
-- 갱신 버튼은 웹/DB의 최신 내용을 다시 가져옵니다. 정기 자동 갱신은 포함하지 않습니다.
+## OCR (선택)
 
-## OCR
+텍스트가 거의 없는 PDF 페이지는 기본적으로 **실패로 표시**합니다. 누락을 조용히 숨기지 않기 위해서입니다.
 
-텍스트가 부족한 PDF 페이지는 기본적으로 실패로 표시하여 누락을 숨기지 않습니다.
-스캔 책은 `uv sync --extra ocr --cache-dir .cache/uv` 실행 후 Tesseract와 `kor`, `eng` 언어 데이터를 설치하고 `.env`에 다음을 설정합니다.
+스캔본을 다루려면 Tesseract와 `kor`, `eng` 언어 데이터를 설치한 뒤:
+
+```bash
+uv sync --extra ocr --cache-dir .cache/uv
+```
 
 ```dotenv
 OCR_ENABLED=true
 OCR_LANGUAGE=kor+eng
-# 필요 시 TESSDATA_PREFIX를 설치된 tessdata 디렉터리로 지정
+# 필요 시 TESSDATA_PREFIX 를 tessdata 디렉터리로 지정
 ```
 
-OCR 결과의 페이지 위치는 보존되지만 표 구조, 수식, 이미지 도표 해석은 보장하지 않습니다.
+페이지 위치는 보존되지만 표 구조·수식·도표 해석은 보장하지 않습니다.
 
-## 개발 및 검증
+---
 
-```powershell
+## 데이터와 전송 범위
+
+| 무엇 | 어디에 |
+|---|---|
+| 원본 파일, 대화, 설정 | `data/` |
+| 청크·임베딩·개체 관계 | 연결한 Neo4j |
+| 비밀키 (API 키, 비밀번호) | `data/app.sqlite`에 **평문** |
+
+**자료 본문은 선택한 모델 서버로 전송됩니다.** 채팅과 임베딩을 모두 로컬 Ollama로 두면 컴퓨터 밖으로 나가지 않습니다. OpenAI를 고르거나, Ollama의 `*-cloud` 태그 모델 또는 외부 Ollama 주소를 쓰면 해당 서버로 전송됩니다.
+
+비밀키는 브라우저로 **되돌려 보내지 않습니다.** 설정 조회 응답은 설정 여부(불리언)만 반환하고, 입력란을 비워두면 기존 값이 유지됩니다. `.env`, `data/`, `database.json`은 Git에서 제외됩니다.
+
+자료를 삭제하면 Neo4j의 Source·Chunk·Assertion, 원본 파일, 그 자료를 쓰던 대화의 에이전트 체크포인트가 함께 제거됩니다. **대화 기록 자체는 남습니다.**
+
+---
+
+## 동작 방식
+
+### 수집
+
+- 파일 최대 30MB, 자료당 최대 2,000청크
+- 청크는 700토큰 / 80토큰 겹침이며 페이지·EPUB spine 위치를 보존
+- 웹은 입력한 **단일 HTML 페이지**만 수집 — 크롤링·로그인·JavaScript 렌더링은 없음
+- 웹 연결은 공개 IP로 제한하고 검증한 주소에 직접 연결해 **DNS rebinding을 차단**. 리디렉션은 최종 URL을 다시 등록해야 함
+- 내용 해시로 중복 재분석을 생략하고, **새 버전이 완전히 만들어진 뒤에야** 활성 포인터를 전환
+- 청크 하나를 파싱하지 못해도 **그 청크만 요약 없이 색인**하고 나머지는 살림
+
+### 검색
+
+- 벡터 검색과 full-text 검색 후보를 RRF로 결합
+- 벡터 쪽은 `SEARCH` 절로 **인덱스 내부에서** 자료 범위와 활성 버전을 필터링
+- full-text 쪽은 후보를 뽑은 뒤 거르므로 자료가 아주 많아지면 recall 평가가 필요
+
+### 답변
+
+- 에이전트가 검색·원문 조회·관계 탐색·전체 요약 도구를 사용
+- 최종 답변은 구조화 출력으로 받고, 모델이 형식을 지키지 못하면 근거 목록을 제시해 **한 번 더 요청**
+- 모든 사실 문단의 ID를 서버 조회 결과와 대조해 검증 — 통과하지 못하면 거절
+
+### 저장과 복구
+
+- 작업 큐는 SQLite. 워커가 재시작되면 중단된 작업을 복구하고, 실패한 작업은 화면에서 재시도
+- 관계는 원문 청크에 연결된 **미검토 추출 결과**입니다. 이름 정규화만 적용하므로 동명이인은 구별하지 못합니다
+
+---
+
+## 개발
+
+```bash
 uv run --frozen --cache-dir .cache/uv pytest -q
 uv run --frozen --cache-dir .cache/uv ruff check app tests
-npm.cmd --prefix frontend run build
+npm --prefix frontend run build
 ```
 
-프런트 개발은 `npm.cmd --prefix frontend run dev`로 실행합니다. `/api` 요청은 8000번 API로 전달됩니다.
+테스트는 **Neo4j나 Ollama 없이** 동작합니다. 실제 모델을 쓰는 테스트 하나만 `RUN_OLLAMA_TESTS=1`일 때 실행됩니다.
 
-주요 코드:
+프런트엔드 개발 서버는 `npm --prefix frontend run dev`이며, `/api` 요청을 API로 전달합니다. API가 8000이 아닌 포트에 있으면 `VITE_API_TARGET`으로 지정하세요.
 
 | 파일 | 역할 |
 |---|---|
 | `app/main.py` | 자료·대화·근거·그래프 API, SSE 응답 |
-| `app/agent.py` | Deep Agents 도구, 대화 체크포인트, 인용 검증 |
-| `app/worker.py` | 영속 작업 큐 처리와 지식 추출 |
-| `app/ingest.py` | 문서/웹/OCR 추출, 청크 생성 |
-| `app/graph.py` | Neo4j 트랜잭션, 검색, 관계 탐색 |
+| `app/agent.py` | Deep Agents 도구, 대화 체크포인트, **인용 검증** |
+| `app/worker.py` | 작업 큐 처리, 임베딩, 요약·관계 추출 |
+| `app/ingest.py` | 문서·웹·OCR 추출과 청크 생성 |
+| `app/graph.py` | Neo4j 트랜잭션, 하이브리드 검색, 관계 탐색 |
 | `app/database.py` | PostgreSQL 허용 조회와 스키마 수집 |
+| `app/store.py` | SQLite 작업 큐와 대화 메타데이터 |
 | `frontend/src/main.jsx` | 자료함·채팅·출처·관계도 UI |
 
-현재 SSE는 진행 상태와 **인용 검증을 마친 최종 답변**을 전송합니다. 검증 전 토큰을 보여주는 스트리밍은 하지 않습니다.
-인용 검증은 ID의 존재를 확인하며 문장과 근거 사이 의미적 정합성까지 보증하지 않습니다.
+---
 
-## 운영 범위
+## 한계
 
-현재는 **단일 사용자, 단일 API 프로세스, 단일 워커**의 로컬 앱입니다. API는 127.0.0.1에 바인딩합니다.
-다중 사용자 인증·권한 격리·인터넷 공개·여러 API 워커는 아직 지원하지 않습니다.
-Neo4j 포트도 localhost에만 열립니다. 외부 서비스로 배포하기 전 인증·자료별 권한·업로드 자원 격리가 필요합니다.
-파서는 로컬 프로세스에서 실행되므로 신뢰하는 자료만 업로드하세요.
+- **단일 사용자, 단일 API 프로세스, 단일 워커**입니다. 인증·권한 격리·다중 워커가 없습니다
+- API는 `127.0.0.1`에만 바인딩합니다. 외부 공개 전에 인증과 자료별 권한이 필요합니다
+- 파서가 로컬 프로세스에서 실행되므로 **신뢰할 수 있는 자료만** 올리세요
+- 답변은 인용 검증을 마친 뒤 한 번에 전송합니다. 검증 전 토큰 스트리밍은 하지 않습니다
+- **인용 ID 검증을 통과했다는 것이 답변 내용의 정확성을 뜻하지는 않습니다.** 문장과 근거 사이의 의미적 정합성까지 보증하지 않습니다
+- 전체 요약 도구는 자료의 모든 청크 요약을 읽습니다. 긴 책의 요약 품질은 별도 평가가 필요합니다
+- 갱신은 수동입니다. 웹·DB의 정기 자동 갱신은 없습니다
 
-원본·대화·화면 설정은 `data/`에, 그래프는 연결한 Neo4j에 저장됩니다. Docker 구성이라면 그래프는 named volume에 저장됩니다. `data/app.sqlite`와 `.env`에는 비밀키가 들어갈 수 있으므로 공유하지 마세요.
-개별 자료 삭제는 원본과 인덱스를 제거합니다. 기존 대화의 본문에 이미 포함된 내용은 별도로 관리해야 합니다.
+---
 
-## 공식 문서
+## 참고 문서
 
-- https://pypi.org/project/deepagents/ (구현 버전 0.7.23)
-- https://docs.langchain.com/oss/python/deepagents/customization
-- https://neo4j.com/docs/cypher-manual/current/indexes/semantic-indexes/vector-indexes/
+- [Deep Agents](https://pypi.org/project/deepagents/) — 구현 버전 0.7.23
+- [Deep Agents 커스터마이징](https://docs.langchain.com/oss/python/deepagents/customization)
+- [Neo4j 벡터 인덱스](https://neo4j.com/docs/cypher-manual/current/indexes/semantic-indexes/vector-indexes/)
 
 ## 보안
 
-이 앱은 **인증이 없고** API 키를 `data/app.sqlite`에 **평문으로** 저장합니다. `127.0.0.1`에만 바인딩해 개인 컴퓨터에서 사용하세요. 자세한 내용과 프롬프트 인젝션 방어 설계는 [SECURITY.md](SECURITY.md)를 참고하세요.
+인증이 없고 API 키를 평문으로 저장합니다. 개인 컴퓨터에서 `127.0.0.1`로만 사용하세요. 자세한 내용과 프롬프트 인젝션 방어 설계는 [SECURITY.md](SECURITY.md)를 참고하세요.
 
 ## 라이선스
 
-[MIT](LICENSE)
+[MIT](LICENSE) © keisoft
